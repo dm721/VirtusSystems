@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Virtus Systems</title>
+  <meta name="description" content="Virtus Systems">
+  <meta name="theme-color" content="#0b0d11">
+  <style>
+    :root {
+      /* ---- Logo settings ---- */
+      --logo-scale: .55;       /* size multiplier: 1 = default, 0.5 = half, 1.5 = one and a half times */
+      --logo-opacity: .85;     /* 1 = solid, hides the diamonds behind the lettering; lower lets them show through; 0 = invisible */
+
+      --bg: #0b0d11;
+      --ink: #d9dde3;
+      --ink-dim: #7d8590;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      height: 100%;
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Segoe UI", system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif;
+      overflow: hidden;
+    }
+
+    #grid {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    /* Darkens the middle (so the logo stays readable) and the far edges */
+    .vignette {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background:
+        radial-gradient(circle at 50% 50%, rgba(11, 13, 17, 0.9) 0, rgba(11, 13, 17, 0.55) 20vmin, rgba(11, 13, 17, 0) 42vmin),
+        radial-gradient(ellipse at 50% 50%, transparent 55%, rgba(11, 13, 17, 0.85) 100%);
+    }
+
+    main {
+      position: relative;
+      height: 100%;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      pointer-events: none;
+    }
+
+    .logo {
+      margin: 0;
+      text-align: center;
+      animation: rise 1.4s cubic-bezier(.2, .7, .2, 1) both;
+    }
+
+    .logo img {
+      display: block;
+      /* The file has wide black margins, so the lettering is ~78% of this width.
+         Capped at 94% of the screen so a large scale never overflows on phones. */
+      width: min(94vw, calc(860px * var(--logo-scale)));
+      height: auto;
+      opacity: var(--logo-opacity);
+    }
+
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(14px); }
+      to   { opacity: 1; transform: none; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .logo { animation: none; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="grid" aria-hidden="true"></canvas>
+  <div class="vignette" aria-hidden="true"></div>
+
+  <main>
+    <h1 class="logo">
+      <!-- logo-transparent.png is logo.png with its black background made transparent -->
+      <img src="assets/logo-transparent.png" alt="Virtus Systems" width="2172" height="724">
+    </h1>
+  </main>
+
+  <script>
+    // --- Background: a flat grid of diamonds whose borders light up around the mouse.
+    //
+    // The grid is two sets of parallel diagonal lines. Measuring position along those two
+    // diagonals (a, b) turns every diamond into a unit square, so the diamond under a point
+    // is just (floor(a), floor(b)). Diamond (0, 0) is centred on the middle of the screen.
+    (function diamondGrid() {
+      var canvas = document.getElementById('grid');
+      var ctx = canvas.getContext('2d');
+
+      // ---- Tunables ----
+      var HALF_W = 16;                           // half the width of a diamond, px
+      var HALF_H = 25;                           // half the height of a diamond, px
+      var LIGHT_RADIUS = 190;                    // how far the light reaches from the pointer, px
+      var LIGHT_STRENGTH = 0.9;                  // brightness right under the pointer, 0..1
+      var LIGHT_EASE_MS = 220;                   // how quickly the light fades in/out as the mouse enters/leaves
+      var LINE_COLOR = 'rgba(150, 165, 185, 0.09)';
+      var LIGHT_RGB = '222, 232, 242';           // colour of the lit borders
+
+      var width, height, dpr, cx, cy;
+      var gridPath = null;                       // all grid lines, rebuilt on resize
+      var pointer = { x: 0, y: 0, active: false };
+      var glow = 0;                              // current strength of the pointer light, 0..1
+
+      function resize() {
+        dpr = Math.min(window.devicePixelRatio || 1, 2);
+        width = window.innerWidth;
+        height = window.innerHeight;
+        cx = width / 2;
+        cy = height / 2;
+        canvas.width = Math.round(width * dpr);
+        canvas.height = Math.round(height * dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        buildGrid();
+      }
+
+      // The grid is two families of diagonal lines, each drawn edge to edge.
+      function buildGrid() {
+        var corners = [[0, 0], [width, 0], [0, height], [width, height]];
+        var aMin = Infinity, aMax = -Infinity, bMin = Infinity, bMax = -Infinity;
+        corners.forEach(function (c) {
+          var a = toA(c[0], c[1]), b = toB(c[0], c[1]);
+          aMin = Math.min(aMin, a); aMax = Math.max(aMax, a);
+          bMin = Math.min(bMin, b); bMax = Math.max(bMax, b);
+        });
+
+        var slope = HALF_W / HALF_H;             // x travelled per px of y along a diagonal
+        var x0 = cx - HALF_W, k, xAtMid;
+        gridPath = new Path2D();
+        for (k = Math.floor(aMin); k <= Math.ceil(aMax); k++) {      // lines leaning one way
+          xAtMid = x0 + 2 * k * HALF_W;
+          gridPath.moveTo(xAtMid + cy * slope, 0);
+          gridPath.lineTo(xAtMid - (height - cy) * slope, height);
+        }
+        for (k = Math.floor(bMin); k <= Math.ceil(bMax); k++) {      // lines leaning the other way
+          xAtMid = x0 + 2 * k * HALF_W;
+          gridPath.moveTo(xAtMid - cy * slope, 0);
+          gridPath.lineTo(xAtMid + (height - cy) * slope, height);
+        }
+      }
+
+      // Screen position -> diagonal coordinates.
+      function toA(x, y) { return ((x - cx + HALF_W) / HALF_W + (y - cy) / HALF_H) / 2; }
+      function toB(x, y) { return ((x - cx + HALF_W) / HALF_W - (y - cy) / HALF_H) / 2; }
+
+      function update(dt) {
+        // Ease the pointer light in and out rather than snapping.
+        glow += ((pointer.active ? 1 : 0) - glow) * (1 - Math.exp(-dt / LIGHT_EASE_MS));
+      }
+
+      function draw() {
+        ctx.clearRect(0, 0, width, height);
+
+        // Base grid.
+        ctx.strokeStyle = LINE_COLOR;
+        ctx.lineWidth = 1;
+        ctx.stroke(gridPath);
+
+        // Pointer light: the same grid lines re-drawn in light, brightest under the pointer
+        // and fading to nothing at LIGHT_RADIUS. Only borders are drawn, so the inside of
+        // each diamond stays the background colour.
+        if (glow > 0.005) {
+          var peak = glow * LIGHT_STRENGTH;
+          var g = ctx.createRadialGradient(pointer.x, pointer.y, 0, pointer.x, pointer.y, LIGHT_RADIUS);
+          // Stops follow (1 - d)^2 so the light falls away smoothly with no visible rim.
+          [0, 0.15, 0.3, 0.45, 0.6, 0.8, 1].forEach(function (d) {
+            g.addColorStop(d, 'rgba(' + LIGHT_RGB + ',' + (peak * (1 - d) * (1 - d)).toFixed(3) + ')');
+          });
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(pointer.x - LIGHT_RADIUS, pointer.y - LIGHT_RADIUS, LIGHT_RADIUS * 2, LIGHT_RADIUS * 2);
+          ctx.clip();
+          ctx.strokeStyle = g;
+          ctx.lineWidth = 1.25;
+          ctx.stroke(gridPath);
+          ctx.restore();
+        }
+      }
+
+      var last = 0;
+      function frame(now) {
+        var dt = last ? Math.min(now - last, 100) : 16;
+        last = now;
+        update(dt);
+        draw();
+        requestAnimationFrame(frame);
+      }
+
+      function onPointer(e) {
+        pointer.x = e.clientX;
+        pointer.y = e.clientY;
+        pointer.active = true;
+      }
+
+      window.addEventListener('resize', resize);
+      window.addEventListener('pointermove', onPointer);
+      window.addEventListener('pointerdown', onPointer);
+      window.addEventListener('pointerup', function (e) {
+        if (e.pointerType !== 'mouse') pointer.active = false;   // touch: stop when the finger lifts
+      });
+      document.documentElement.addEventListener('pointerleave', function () { pointer.active = false; });
+      window.addEventListener('blur', function () { pointer.active = false; });
+      document.addEventListener('visibilitychange', function () { last = 0; });
+
+      resize();
+      requestAnimationFrame(frame);
+    })();
+  </script>
+</body>
+</html>
