@@ -12,6 +12,11 @@
       --logo-scale: .55;       /* size multiplier: 1 = default, 0.5 = half, 1.5 = one and a half times */
       --logo-opacity: .85;     /* 1 = solid, hides the diamonds behind the lettering; lower lets them show through; 0 = invisible */
 
+      /* ---- Hover light settings ---- */
+      --hover-brightness: 0.75; /* how bright the borders get right under the pointer: 0 = off, 1 = full */
+      --hover-radius: 120;     /* how far the light reaches from the pointer, in pixels (no "px") */
+      --hover-lag: 10;        /* how far the light trails behind the mouse, in milliseconds: 0 = locked to the pointer, 300+ = heavy drift */
+
       --bg: #0b0d11;
       --ink: #d9dde3;
       --ink-dim: #7d8590;
@@ -104,15 +109,23 @@
       // ---- Tunables ----
       var HALF_W = 16;                           // half the width of a diamond, px
       var HALF_H = 25;                           // half the height of a diamond, px
-      var LIGHT_RADIUS = 190;                    // how far the light reaches from the pointer, px
-      var LIGHT_STRENGTH = 0.9;                  // brightness right under the pointer, 0..1
+      // Brightness and radius of the hover light are set at the top of the <style> block
+      // (--hover-brightness and --hover-radius). The numbers here are only fallbacks.
+      function setting(name, fallback) {
+        var value = parseFloat(getComputedStyle(document.documentElement).getPropertyValue(name));
+        return isFinite(value) ? value : fallback;
+      }
+      var LIGHT_RADIUS = Math.max(1, setting('--hover-radius', 190));
+      var LIGHT_STRENGTH = Math.min(1, Math.max(0, setting('--hover-brightness', 0.9)));
       var LIGHT_EASE_MS = 220;                   // how quickly the light fades in/out as the mouse enters/leaves
       var LINE_COLOR = 'rgba(150, 165, 185, 0.09)';
       var LIGHT_RGB = '222, 232, 242';           // colour of the lit borders
 
       var width, height, dpr, cx, cy;
       var gridPath = null;                       // all grid lines, rebuilt on resize
+      var LIGHT_LAG_MS = Math.max(0, setting('--hover-lag', 120));
       var pointer = { x: 0, y: 0, active: false };
+      var spot = { x: 0, y: 0 };                 // where the light actually is; trails the pointer
       var glow = 0;                              // current strength of the pointer light, 0..1
 
       function resize() {
@@ -157,6 +170,17 @@
       function toB(x, y) { return ((x - cx + HALF_W) / HALF_W - (y - cy) / HALF_H) / 2; }
 
       function update(dt) {
+        // Move the light toward the pointer. With no lag, or when the light is switched off
+        // (so it doesn't fly in from wherever it was last), it jumps straight there.
+        if (LIGHT_LAG_MS === 0 || glow < 0.02) {
+          spot.x = pointer.x;
+          spot.y = pointer.y;
+        } else {
+          var follow = 1 - Math.exp(-dt / LIGHT_LAG_MS);
+          spot.x += (pointer.x - spot.x) * follow;
+          spot.y += (pointer.y - spot.y) * follow;
+        }
+
         // Ease the pointer light in and out rather than snapping.
         glow += ((pointer.active ? 1 : 0) - glow) * (1 - Math.exp(-dt / LIGHT_EASE_MS));
       }
@@ -174,14 +198,14 @@
         // each diamond stays the background colour.
         if (glow > 0.005) {
           var peak = glow * LIGHT_STRENGTH;
-          var g = ctx.createRadialGradient(pointer.x, pointer.y, 0, pointer.x, pointer.y, LIGHT_RADIUS);
+          var g = ctx.createRadialGradient(spot.x, spot.y, 0, spot.x, spot.y, LIGHT_RADIUS);
           // Stops follow (1 - d)^2 so the light falls away smoothly with no visible rim.
           [0, 0.15, 0.3, 0.45, 0.6, 0.8, 1].forEach(function (d) {
             g.addColorStop(d, 'rgba(' + LIGHT_RGB + ',' + (peak * (1 - d) * (1 - d)).toFixed(3) + ')');
           });
           ctx.save();
           ctx.beginPath();
-          ctx.rect(pointer.x - LIGHT_RADIUS, pointer.y - LIGHT_RADIUS, LIGHT_RADIUS * 2, LIGHT_RADIUS * 2);
+          ctx.rect(spot.x - LIGHT_RADIUS, spot.y - LIGHT_RADIUS, LIGHT_RADIUS * 2, LIGHT_RADIUS * 2);
           ctx.clip();
           ctx.strokeStyle = g;
           ctx.lineWidth = 1.25;
